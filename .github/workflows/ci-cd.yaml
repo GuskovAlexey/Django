@@ -1,0 +1,108 @@
+name: ci-cd
+
+env:
+        DOCKERHUB_USERNAME: ${{secrets.DOCKERHUB_USERNAME}}
+        DOCKERHUB_TOKEN: ${{secrets.DOCKERHUB_TOKEN }}
+        PRODUCT_REPO_NAME: ${{secrets.PRODUCT_REPO_NAME}}
+
+on: 
+  workflow_dispatch:
+  push:
+      branches:
+        - 'main'   
+  pull_request:
+    # types: [opened, edited,reopened]
+    paths-ignore:
+        - '.github/workflows/*'
+        - '.github/README.md'
+  
+jobs: 
+  
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}      
+      - name: Build user service docker image sha
+        run: docker build  --file Dockerfile -t "$DOCKERHUB_USERNAME/$PRODUCT_REPO_NAME:${{ github.sha }}" .
+      - name: Push user service docker image sha
+        run: docker push "$DOCKERHUB_USERNAME/$PRODUCT_REPO_NAME:${{ github.sha }}"
+      - name: Build user service docker image latest
+        run: docker build  --file Dockerfile -t "$DOCKERHUB_USERNAME/$PRODUCT_REPO_NAME:latest" .
+      - name: Push user service docker image latest
+        run: docker push "$DOCKERHUB_USERNAME/$PRODUCT_REPO_NAME:latest"
+    
+  test:
+    needs: [build]
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+
+    - name: Start services with Docker Compose
+      run: |
+        docker-compose up -d
+
+    - name: Wait for services to start
+      run: |
+        sleep 10
+
+    - name: Check URL with curl
+      id: curl_test
+      run: |
+        url="http://localhost:8085/hello/"
+        response=$(curl -s -o /dev/null -w "%{http_code}" $url)
+        echo "::set-output name=response_code::$response"
+    
+    - name: Test result
+      run: |
+        if [ ${{ steps.curl_test.outputs.response_code }} -eq 200 ]; then
+          echo "Тест успешен! Веб-сайт доступен."
+        else
+          echo "Тест не пройден! Веб-сайт недоступен. Код ответа: ${{ steps.curl_test.outputs.response_code }}"
+          exit 1
+        fi
+  
+    - name: Stop and remove containers
+      run: |
+        docker-compose down  
+  
+
+  # deploy:
+  #   needs: [test, build]
+  #   name: Deploy to Kubernetes 
+  #   runs-on: ubuntu-latest
+  #   defaults:
+  #     run:
+  #       working-directory: ./app
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v2
+  #   - name: Create kubeconfig
+  #     env:
+  #        KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+  #     run: |
+  #        sudo mkdir ${HOME}/.kube
+  #        sudo chown -R $USER ${HOME}/.kube 
+  #        sudo echo "$KUBE_CONFIG" | base64 -d  > ${HOME}/.kube/config
+              
+  #   - name: Use context
+  #     run: kubectl config use-context kind-app-cluster
+  #   - name: Deploy to K8s
+  #     run: |
+  #       kubectl --insecure-skip-tls-verify rollout restart deployment/django -n dev
+  #       kubectl --insecure-skip-tls-verify rollout status deployment/django -n dev

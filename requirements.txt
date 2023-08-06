@@ -1,0 +1,6 @@
+Django
+psycopg2
+gunicorn
+django-environ
+python-decouple
+environs
